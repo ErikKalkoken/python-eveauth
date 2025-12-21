@@ -24,6 +24,7 @@ import threading
 import time
 import urllib.parse
 import webbrowser
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from http import server
@@ -65,7 +66,6 @@ class Token:
         refresh_token = token_payload.get("refresh_token", "")
         if not refresh_token:
             raise ValueError("can not find refresh token in token payload")
-
         claims = client._validate_jwt_token(access_token)
         sub = claims.get("sub", "")
         sub_parts = str.split(sub, ":")
@@ -84,7 +84,7 @@ class Token:
         return token
 
 
-class _RequestHandler(server.BaseHTTPRequestHandler):
+class RequestHandler(server.BaseHTTPRequestHandler):
     """Handle all HTTP requests for the SSO Server."""
 
     token: Optional[Token] = None
@@ -97,43 +97,59 @@ class _RequestHandler(server.BaseHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
 
         if parsed_url.path == "/callback":
-            query_dict = urllib.parse.parse_qs(parsed_url.query)
-            data = {k: v[0] if len(v) == 1 else v for k, v in query_dict.items()}
+            with self.handle_error():
+                query_dict = urllib.parse.parse_qs(parsed_url.query)
+                data = {k: v[0] if len(v) == 1 else v for k, v in query_dict.items()}
 
-            if data["state"] != self._state:
-                self.send_response(500)
+                if data["state"] != self._state:
+                    raise RuntimeError("Invalid state")
+
+                code_verifier, _ = _generate_code_challenge()
+                x = data.get("code", "")
+                code = x[0] if isinstance(x, list) else x
+
+                client: Client = self.server._client  # type: ignore
+                token_payload = client._fetch_token(code, code_verifier)
+                token = Token._from_payload(token_payload, client)
+                RequestHandler.token = token
+                self.send_response(302)
+                self.send_header("Location", "/authorized")
                 self.end_headers()
-                self.wfile.write(b"Invalid state")
-                return
-
-            code_verifier, _ = _generate_code_challenge()
-            x = data.get("code", "")
-            code = x[0] if isinstance(x, list) else x
-
-            client = self.server._client  # type: ignore
-            token_payload = client._fetch_token(code, code_verifier)
-            token = Token._from_payload(token_payload, client)
-            _RequestHandler.token = token
-            self.send_response(302)
-            self.send_header("Location", "/authorized")
-            self.end_headers()
 
         elif parsed_url.path == "/authorized":
-            self.send_response(200)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            token = _RequestHandler.token
-            if not token:
-                raise RuntimeError("token not found")
-            message = f"<p>Your app has been authorized for {token.character_name}</p>"
-            self.wfile.write(message.encode("utf-8"))
-            self.server._client._result.put(token)  # type: ignore
+            with self.handle_error():
+                self.send_response(200)
+                self.send_header("Content-type", "text/html")
+                self.end_headers()
+                token = RequestHandler.token
+                if not token:
+                    raise RuntimeError("token not found")
+                message = (
+                    f"<p>Your app has been authorized for {token.character_name}</p>"
+                )
+                self.wfile.write(message.encode("utf-8"))
+                client: Client = self.server._client  # type: ignore
+                client._result.put(token)
 
         else:
-            # Handle 404 for any other paths
+            # Show 404 for any other paths
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b"Not Found")
+
+    @contextmanager
+    def handle_error(self):
+        """Show an internal server error when an exception occurred."""
+        try:
+            yield self  # This is what 'as' receives in the with-block
+        except Exception as ex:
+            logger.error("Request aborted due to exception", exc_info=True)
+            self.send_response(500)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            error_message = f"Internal Server Error: {str(ex)}"
+            self.wfile.write(error_message.encode())
+            raise
 
 
 def _generate_code_challenge() -> Tuple[bytes, str]:
@@ -146,13 +162,15 @@ def _generate_code_challenge() -> Tuple[bytes, str]:
 
 
 class MyHTTPServer(server.HTTPServer):
+    """A custom HTTP server that can handle errors."""
+
     def __init__(self, client: "Client", *args, **kwargs) -> None:
         self._client = client
         super().__init__(*args, **kwargs)
 
     def handle_error(self, *args, **kwargs) -> None:
-        print("SHUTDOWN")
-        self.shutdown()
+        # Abort all consumers waiting for the result queue when a exception occurred
+        self._client._result.shutdown(immediate=True)
 
 
 class Client:
@@ -161,19 +179,24 @@ class Client:
     It implements OAuth 2.0 with the PKCE protocol.
 
     A Client instance is re-usable.
+
+    Client will log to the standard logger.
     """
 
     def __init__(self, client_id: str, port: int, host: str = "127.0.0.1") -> None:
         self._client_id = str(client_id)
         self._port = int(port)
         self._host = str(host)
-        self._result = queue.Queue()
+        self._result = queue.Queue(1)
         self._server_running = False
         self._jwks_metadata: Optional[dict] = None
         self._jwks_metadata_ttl = 0
 
     def authorize(self, scopes: List[str]) -> Token:
-        """Authorize with the SSO Service and return a token."""
+        """Authorize with the SSO Service and return a token.
+
+        Raises a RuntimeError when authorization fails.
+        """
         scopes = [str(x) for x in scopes]
         if self._server_running:
             raise RuntimeError("server already running")
@@ -184,7 +207,7 @@ class Client:
         # Start server
         # allow_reuse_address helps avoid 'Address already in use' errors on restart
         MyHTTPServer.allow_reuse_address = True
-        handler = partial(_RequestHandler, state)
+        handler = partial(RequestHandler, state)
         httpd = MyHTTPServer(
             client=self,
             server_address=(self._host, self._port),
@@ -197,14 +220,17 @@ class Client:
         self._server_running = True
 
         webbrowser.open(url)
-        token: Token = self._result.get()
-
-        # Stops the server and cleans up the thread
-        httpd.shutdown()  # Stops serve_forever loop
-        httpd.server_close()  # Closes the socket
-        thread.join()
-        self._server_running = False
-        logger.info("Server stopped.")
+        try:
+            token: Token = self._result.get()
+        except queue.ShutDown:
+            raise RuntimeError("Failed to authorize") from None
+        finally:
+            # Stops the server and cleans up the thread
+            httpd.shutdown()  # Stops serve_forever loop
+            httpd.server_close()  # Closes the socket
+            thread.join()
+            self._server_running = False
+            logger.info("Server stopped.")
 
         return token
 
