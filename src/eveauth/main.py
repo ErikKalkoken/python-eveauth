@@ -53,7 +53,7 @@ class Token:
     scopes: List[str]
 
     def is_valid(self) -> bool:
-        return self.expires_at < dt.datetime.now()
+        return self.expires_at > dt.datetime.now()
 
     @classmethod
     def _from_payload(cls, token_payload: dict) -> "Token":
@@ -145,11 +145,8 @@ class _RequestHandler(server.BaseHTTPRequestHandler):
             self.send_header("Content-type", "text/html")
             self.end_headers()
             token = Token._from_payload(_RequestHandler.token_payload)
-            self.wfile.write(
-                f"<p>Your app has been authorized for {token.character_name}</p>".encode(
-                    "utf-8"
-                )
-            )
+            message = f"<p>Your app has been authorized for {token.character_name}</p>"
+            self.wfile.write(message.encode("utf-8"))
             self._client._result.put(token)
 
         else:
@@ -246,8 +243,8 @@ class Client:
         return token_payload
 
     def _fetch_token(self, authorization_code: str, code_verifier: bytes) -> dict:
-        """Exchange authorization code and code verifier for an access token and refresh token
-        and return them.
+        """Exchange authorization code and code verifier for an access token
+        and refresh token and return them.
         """
         data = {
             "grant_type": "authorization_code",
