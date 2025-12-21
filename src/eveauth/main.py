@@ -179,11 +179,14 @@ class Client:
     It implements OAuth 2.0 with the PKCE protocol.
 
     A Client instance is re-usable.
-
     Client will log to the standard logger.
+
+    The default callback is: http://127.0.0.1:8080/callback
     """
 
-    def __init__(self, client_id: str, port: int, host: str = "127.0.0.1") -> None:
+    def __init__(
+        self, client_id: str, port: int = 8080, host: str = "127.0.0.1"
+    ) -> None:
         self._client_id = str(client_id)
         self._port = int(port)
         self._host = str(host)
@@ -192,17 +195,16 @@ class Client:
         self._jwks_metadata: Optional[dict] = None
         self._jwks_metadata_ttl = 0
 
-    def authorize(self, scopes: List[str]) -> Token:
+    def authorize(self, *scopes: str) -> Token:
         """Authorize with the SSO Service and return a token.
 
         Raises a RuntimeError when authorization fails.
         """
-        scopes = [str(x) for x in scopes]
         if self._server_running:
             raise RuntimeError("server already running")
 
         url, state = self._make_sso_url(
-            scopes, f"http://{self._host}:{self._port}/callback"
+            [str(x) for x in scopes], f"http://{self._host}:{self._port}/callback"
         )
         # Start server
         # allow_reuse_address helps avoid 'Address already in use' errors on restart
@@ -331,5 +333,4 @@ class Client:
 
         self._jwks_metadata = jwks_metadata
         self._jwks_metadata_ttl = time.time() + METADATA_CACHE_TIME
-        print(jwks_metadata)
         return jwks_metadata

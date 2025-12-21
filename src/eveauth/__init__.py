@@ -3,4 +3,4 @@
 from .main import Client, Token
 
 __all__ = ["Client", "Token"]
-__version__ = "0.1.0dev1"
+__version__ = "0.1.0a1"
