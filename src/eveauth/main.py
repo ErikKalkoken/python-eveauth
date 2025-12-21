@@ -22,15 +22,14 @@ import random
 import secrets
 import string
 import threading
-import urllib
 import urllib.parse
-import urllib.request
 import webbrowser
 from dataclasses import dataclass
 from functools import partial
 from http import server
 from typing import List, Tuple
-from urllib.parse import parse_qs, urlparse
+
+import requests
 
 _ACCEPTED_ISSUERS = ("login.eveonline.com", "https://login.eveonline.com")
 _AUTHORIZE_URL = "https://login.eveonline.com/v2/oauth/authorize"
@@ -117,10 +116,10 @@ class _RequestHandler(server.BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self):
-        parsed_url = urlparse(self.path)
+        parsed_url = urllib.parse.urlparse(self.path)
 
         if parsed_url.path == "/callback":
-            query_dict = parse_qs(parsed_url.query)
+            query_dict = urllib.parse.parse_qs(parsed_url.query)
             data = {k: v[0] if len(v) == 1 else v for k, v in query_dict.items()}
 
             if data["state"] != self._state:
@@ -174,14 +173,15 @@ class Client:
     """
 
     def __init__(self, client_id: str, port: int, host: str = "127.0.0.1"):
-        self._client_id = client_id
-        self._port = port
-        self._host = host
+        self._client_id = str(client_id)
+        self._port = int(port)
+        self._host = str(host)
         self._result = queue.Queue()
         self._server_running = False
 
     def authorize(self, scopes: List[str]) -> Token:
         """Authorize with the SSO Service and return a token."""
+        scopes = [str(x) for x in scopes]
         if self._server_running:
             raise RuntimeError("server already running")
 
@@ -224,24 +224,6 @@ class Client:
         query_string = urllib.parse.urlencode(query_params)
         return (f"{_AUTHORIZE_URL}?{query_string}", state)
 
-    def _fetch_refreshed_token(self, refresh_token: str) -> dict:
-        """Refresh a token with the SSO service and return it."""
-        data = {
-            "client_id": self._client_id,
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-        }
-        encoded_data = urllib.parse.urlencode(data).encode("utf-8")
-        req = urllib.request.Request(_TOKEN_URL, data=encoded_data, method="POST")
-
-        req.add_header("Content-Type", "application/x-www-form-urlencoded")
-        req.add_header("Host", _RESOURCE_HOST)
-
-        with urllib.request.urlopen(req) as response:
-            token_payload = json.loads(response.read().decode("utf-8"))
-
-        return token_payload
-
     def _fetch_token(self, authorization_code: str, code_verifier: bytes) -> dict:
         """Exchange authorization code and code verifier for an access token
         and refresh token and return them.
@@ -252,13 +234,9 @@ class Client:
             "client_id": self._client_id,
             "code_verifier": code_verifier,
         }
-        encoded_data = urllib.parse.urlencode(data).encode("utf-8")
-        req = urllib.request.Request(_TOKEN_URL, data=encoded_data, method="POST")
-
-        with urllib.request.urlopen(req) as response:
-            token_payload = json.loads(response.read().decode("utf-8"))
-
-        return token_payload
+        response = requests.post(_TOKEN_URL, data=data)
+        response.raise_for_status()
+        return response.json()
 
     def refresh_token(self, token: Token) -> None:
         """Refresh a token."""
@@ -268,3 +246,17 @@ class Client:
         token.refresh_token = token_2.refresh_token
         token.character_name = token_2.character_name
         token.expires_at = token_2.expires_at
+
+    def _fetch_refreshed_token(self, refresh_token: str) -> dict:
+        """Refresh a token with the SSO service and return it."""
+        data = {
+            "client_id": self._client_id,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }
+        headers = {
+            "Host": _RESOURCE_HOST,
+        }
+        response = requests.post(_TOKEN_URL, data=data, headers=headers)
+        response.raise_for_status()
+        return response.json()
