@@ -89,8 +89,7 @@ class _RequestHandler(server.BaseHTTPRequestHandler):
 
     token: Optional[Token] = None
 
-    def __init__(self, client: "Client", state: str, *args, **kwargs) -> None:
-        self._client = client
+    def __init__(self, state: str, *args, **kwargs) -> None:
         self._state = state
         super().__init__(*args, **kwargs)
 
@@ -111,8 +110,9 @@ class _RequestHandler(server.BaseHTTPRequestHandler):
             x = data.get("code", "")
             code = x[0] if isinstance(x, list) else x
 
-            token_payload = self._client._fetch_token(code, code_verifier)
-            token = Token._from_payload(token_payload, self._client)
+            client = self.server._client  # type: ignore
+            token_payload = client._fetch_token(code, code_verifier)
+            token = Token._from_payload(token_payload, client)
             _RequestHandler.token = token
             self.send_response(302)
             self.send_header("Location", "/authorized")
@@ -127,7 +127,7 @@ class _RequestHandler(server.BaseHTTPRequestHandler):
                 raise RuntimeError("token not found")
             message = f"<p>Your app has been authorized for {token.character_name}</p>"
             self.wfile.write(message.encode("utf-8"))
-            self._client._result.put(token)
+            self.server._client._result.put(token)  # type: ignore
 
         else:
             # Handle 404 for any other paths
@@ -143,6 +143,16 @@ def _generate_code_challenge() -> Tuple[bytes, str]:
     sha256.update(code_verifier)
     code_challenge = base64.urlsafe_b64encode(sha256.digest()).decode().rstrip("=")
     return (code_verifier, code_challenge)
+
+
+class MyHTTPServer(server.HTTPServer):
+    def __init__(self, client: "Client", *args, **kwargs) -> None:
+        self._client = client
+        super().__init__(*args, **kwargs)
+
+    def handle_error(self, *args, **kwargs) -> None:
+        print("SHUTDOWN")
+        self.shutdown()
 
 
 class Client:
@@ -173,9 +183,13 @@ class Client:
         )
         # Start server
         # allow_reuse_address helps avoid 'Address already in use' errors on restart
-        server.HTTPServer.allow_reuse_address = True
-        handler = partial(_RequestHandler, self, state)
-        httpd = server.HTTPServer((self._host, self._port), handler)
+        MyHTTPServer.allow_reuse_address = True
+        handler = partial(_RequestHandler, state)
+        httpd = MyHTTPServer(
+            client=self,
+            server_address=(self._host, self._port),
+            RequestHandlerClass=handler,
+        )
         thread = threading.Thread(target=httpd.serve_forever)
         thread.daemon = True  # Ensures thread dies when main script exits
         thread.start()
