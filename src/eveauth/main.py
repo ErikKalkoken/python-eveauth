@@ -15,27 +15,30 @@ Usage:
 import base64
 import datetime as dt
 import hashlib
-import json
 import logging
 import queue
 import random
 import secrets
 import string
 import threading
+import time
 import urllib.parse
 import webbrowser
 from dataclasses import dataclass
 from functools import partial
 from http import server
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+from jose import jwt
 
-_ACCEPTED_ISSUERS = ("login.eveonline.com", "https://login.eveonline.com")
-_AUTHORIZE_URL = "https://login.eveonline.com/v2/oauth/authorize"
-_RESOURCE_HOST = "login.eveonline.com"
-_TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
-
+ACCEPTED_ISSUERS = ("login.eveonline.com", "https://login.eveonline.com")
+AUTHORIZE_URL = "https://login.eveonline.com/v2/oauth/authorize"
+EXPECTED_AUDIENCE = "EVE Online"
+METADATA_CACHE_TIME = 300  # 5 minutes
+METADATA_URL = "https://login.eveonline.com/.well-known/oauth-authorization-server"
+RESOURCE_HOST = "login.eveonline.com"
+TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
 
 logger = logging.getLogger(__name__)
 
@@ -55,67 +58,43 @@ class Token:
         return self.expires_at > dt.datetime.now()
 
     @classmethod
-    def _from_payload(cls, token_payload: dict) -> "Token":
+    def _from_payload(cls, token_payload: dict, client: "Client") -> "Token":
         access_token = token_payload.get("access_token", "")
         if not access_token:
             raise ValueError("can not find access token in token payload")
         refresh_token = token_payload.get("refresh_token", "")
         if not refresh_token:
             raise ValueError("can not find refresh token in token payload")
-        parsed = _parse_jwt(access_token)
-        sub = parsed.get("sub", "")
+
+        claims = client._validate_jwt_token(access_token)
+        sub = claims.get("sub", "")
         sub_parts = str.split(sub, ":")
         if len(sub_parts) != 3:
-            raise ValueError(f"Invalid sub section: {parsed['sub']}")
-        scopes = parsed["scp"]
+            raise ValueError(f"Invalid sub section: {claims['sub']}")
+
+        scopes = claims["scp"]
         token = cls(
             access_token=access_token,
             refresh_token=refresh_token,
             character_id=int(sub_parts[2]),
-            character_name=parsed.get("name", ""),
-            expires_at=dt.datetime.fromtimestamp(parsed.get("exp", 0)),
+            character_name=claims.get("name", ""),
+            expires_at=dt.datetime.fromtimestamp(claims.get("exp", 0)),
             scopes=[scopes] if isinstance(scopes, str) else list(scopes),
         )
         return token
 
 
-def _parse_jwt(access_token: str) -> dict:
-    """Return the parsed content of an SSO access token."""
-    # Split the token into its three parts
-    parts = access_token.split(".")
-    if len(parts) != 3:
-        raise ValueError("Token does not have 3 parts")
-
-    # We only need the payload (the second part)
-    payload_b64 = parts[1]
-
-    # Add padding back if necessary
-    # Base64 strings must be multiples of 4
-    missing_padding = len(payload_b64) % 4
-    if missing_padding:
-        payload_b64 += "=" * (4 - missing_padding)
-
-    # Decode the Base64URL string
-    decoded_bytes = base64.urlsafe_b64decode(payload_b64)
-
-    payload_data = json.loads(decoded_bytes)
-    if payload_data["iss"] not in _ACCEPTED_ISSUERS:
-        raise ValueError(f"Invalid issuer: {payload_data["iss"]}")
-
-    return payload_data
-
-
 class _RequestHandler(server.BaseHTTPRequestHandler):
     """Handle all HTTP requests for the SSO Server."""
 
-    token_payload = dict()
+    token: Optional[Token] = None
 
     def __init__(self, client: "Client", state: str, *args, **kwargs) -> None:
         self._client = client
         self._state = state
         super().__init__(*args, **kwargs)
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         parsed_url = urllib.parse.urlparse(self.path)
 
         if parsed_url.path == "/callback":
@@ -131,10 +110,10 @@ class _RequestHandler(server.BaseHTTPRequestHandler):
             code_verifier, _ = _generate_code_challenge()
             x = data.get("code", "")
             code = x[0] if isinstance(x, list) else x
-            _RequestHandler.token_payload = self._client._fetch_token(
-                code, code_verifier
-            )
 
+            token_payload = self._client._fetch_token(code, code_verifier)
+            token = Token._from_payload(token_payload, self._client)
+            _RequestHandler.token = token
             self.send_response(302)
             self.send_header("Location", "/authorized")
             self.end_headers()
@@ -143,7 +122,9 @@ class _RequestHandler(server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            token = Token._from_payload(_RequestHandler.token_payload)
+            token = _RequestHandler.token
+            if not token:
+                raise RuntimeError("token not found")
             message = f"<p>Your app has been authorized for {token.character_name}</p>"
             self.wfile.write(message.encode("utf-8"))
             self._client._result.put(token)
@@ -172,12 +153,14 @@ class Client:
     A Client instance is re-usable.
     """
 
-    def __init__(self, client_id: str, port: int, host: str = "127.0.0.1"):
+    def __init__(self, client_id: str, port: int, host: str = "127.0.0.1") -> None:
         self._client_id = str(client_id)
         self._port = int(port)
         self._host = str(host)
         self._result = queue.Queue()
         self._server_running = False
+        self._jwks_metadata: Optional[dict] = None
+        self._jwks_metadata_ttl = 0
 
     def authorize(self, scopes: List[str]) -> Token:
         """Authorize with the SSO Service and return a token."""
@@ -222,9 +205,11 @@ class Client:
             "state": state,
         }
         query_string = urllib.parse.urlencode(query_params)
-        return (f"{_AUTHORIZE_URL}?{query_string}", state)
+        return (f"{AUTHORIZE_URL}?{query_string}", state)
 
-    def _fetch_token(self, authorization_code: str, code_verifier: bytes) -> dict:
+    def _fetch_token(
+        self, authorization_code: str, code_verifier: bytes
+    ) -> Dict[str, Any]:
         """Exchange authorization code and code verifier for an access token
         and refresh token and return them.
         """
@@ -234,20 +219,20 @@ class Client:
             "client_id": self._client_id,
             "code_verifier": code_verifier,
         }
-        response = requests.post(_TOKEN_URL, data=data)
+        response = requests.post(TOKEN_URL, data=data)
         response.raise_for_status()
         return response.json()
 
     def refresh_token(self, token: Token) -> None:
         """Refresh a token."""
         token_payload = self._fetch_refreshed_token(token.refresh_token)
-        token_2 = Token._from_payload(token_payload)
+        token_2 = Token._from_payload(token_payload, self)
         token.access_token = token_2.access_token
         token.refresh_token = token_2.refresh_token
         token.character_name = token_2.character_name
         token.expires_at = token_2.expires_at
 
-    def _fetch_refreshed_token(self, refresh_token: str) -> dict:
+    def _fetch_refreshed_token(self, refresh_token: str) -> Dict[str, Any]:
         """Refresh a token with the SSO service and return it."""
         data = {
             "client_id": self._client_id,
@@ -255,8 +240,56 @@ class Client:
             "refresh_token": refresh_token,
         }
         headers = {
-            "Host": _RESOURCE_HOST,
+            "Host": RESOURCE_HOST,
         }
-        response = requests.post(_TOKEN_URL, data=data, headers=headers)
+        response = requests.post(TOKEN_URL, data=data, headers=headers)
         response.raise_for_status()
         return response.json()
+
+    def _validate_jwt_token(self, token: str | bytes) -> Dict[str, Any]:
+        """
+        Validates a JWT Token.
+
+        :param str token: The JWT token to validate
+        :returns: The content of the validated JWT access token
+        :raises ExpiredSignatureError: If the token has expired
+        :raises JWTError: If the token is invalid
+        """
+        metadata = self._fetch_jwks_metadata()
+        keys = metadata["keys"]
+        header = jwt.get_unverified_header(token)
+        key = [
+            item
+            for item in keys
+            if item["kid"] == header["kid"] and item["alg"] == header["alg"]
+        ].pop()
+        return jwt.decode(
+            token,
+            key=key,
+            algorithms=header["alg"],
+            issuer=ACCEPTED_ISSUERS,
+            audience=EXPECTED_AUDIENCE,
+        )
+
+    def _fetch_jwks_metadata(self) -> Dict[str, Any]:
+        """
+        Fetches the JWKS metadata from the SSO server.
+
+        :returns: The JWKS metadata
+        """
+        if self._jwks_metadata and self._jwks_metadata_ttl > time.time():
+            return self._jwks_metadata
+
+        resp = requests.get(METADATA_URL)
+        resp.raise_for_status()
+        metadata = resp.json()
+
+        jwks_uri = metadata["jwks_uri"]
+        resp = requests.get(jwks_uri)
+        resp.raise_for_status()
+        jwks_metadata = resp.json()
+
+        self._jwks_metadata = jwks_metadata
+        self._jwks_metadata_ttl = time.time() + METADATA_CACHE_TIME
+        print(jwks_metadata)
+        return jwks_metadata

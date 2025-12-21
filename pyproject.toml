@@ -26,16 +26,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = [
-    "requests",
-]
+dependencies = ["requests", "python-jose"]
 
 [project.urls]
-Homepage = "https://gitlab.com/ErikKalkoken/dhooks-lite"
-Documentation = "https://dhooks-lite.readthedocs.io/en/latest/"
-Source = "https://gitlab.com/ErikKalkoken/dhooks-lite"
-Changelog = "https://gitlab.com/ErikKalkoken/dhooks-lite/-/blob/master/CHANGELOG.md"
-Tracker = "https://gitlab.com/ErikKalkoken/dhooks-lite/-/issues"
+Homepage = "https://github.com/ErikKalkoken/python-eveauth"
+Source = "https://github.com/ErikKalkoken/python-eveauth"
+Tracker = "https://github.com/ErikKalkoken/python-eveauth/issues"
 
 [tool.flit.module]
 name = "eveauth"
