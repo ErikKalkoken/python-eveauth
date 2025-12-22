@@ -3,12 +3,26 @@ name: CI/CD
 on: push
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+
   test:
+    needs: lint
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Versions listed here create parallel jobs
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:

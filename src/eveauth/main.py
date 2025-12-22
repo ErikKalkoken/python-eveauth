@@ -27,7 +27,7 @@ import webbrowser
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
-from http import server
+from http import HTTPStatus, server
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -86,13 +86,11 @@ class Token:
         return token
 
 
-class RequestHandler(server.BaseHTTPRequestHandler):
+class MyRequestHandler(server.BaseHTTPRequestHandler):
     """Handle all HTTP requests for the SSO Server."""
 
-    token: Optional[Token] = None
-
     def __init__(self, state: str, *args, **kwargs) -> None:
-        self._state = state
+        self.state = state
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
@@ -103,41 +101,53 @@ class RequestHandler(server.BaseHTTPRequestHandler):
                 query_dict = urllib.parse.parse_qs(parsed_url.query)
                 data = {k: v[0] if len(v) == 1 else v for k, v in query_dict.items()}
 
-                if data["state"] != self._state:
+                if data["state"] != self.state:
                     raise RuntimeError("Invalid state")
 
                 code_verifier, _ = generate_code_challenge()
                 x = data.get("code", "")
                 code = x[0] if isinstance(x, list) else x
 
-                client: Client = self.server._client  # type: ignore
+                client: Client = self.server.client  # type: ignore
                 token_payload = client._fetch_token(code, code_verifier)
                 token = Token._from_payload(token_payload, client)
-                RequestHandler.token = token
-                self.send_response(302)
+                self.server.token = token  # type: ignore
+                self.send_response(HTTPStatus.FOUND)
                 self.send_header("Location", "/authorized")
                 self.end_headers()
 
         elif parsed_url.path == "/authorized":
             with self.handle_error():
-                self.send_response(200)
+                self.send_response(HTTPStatus.OK)
                 self.send_header("Content-type", "text/html")
                 self.end_headers()
-                token = RequestHandler.token
+                token: Token = self.server.token  # type: ignore
                 if not token:
                     raise RuntimeError("token not found")
                 message = (
                     f"<p>Your app has been authorized for {token.character_name}</p>"
                 )
                 self.wfile.write(message.encode("utf-8"))
-                client: Client = self.server._client  # type: ignore
+                client: Client = self.server.client  # type: ignore
                 client._result.put(token)
 
         else:
             # Show 404 for any other paths
-            self.send_response(404)
+            self.send_response(HTTPStatus.NOT_FOUND)
             self.end_headers()
             self.wfile.write(b"Not Found")
+
+    def log_message(self, format: str, *args: Any) -> None:
+        try:
+            status_code = int(args[1])
+        except (IndexError, ValueError, TypeError):
+            status_code = 0
+
+        if status_code >= 400:
+            logger.warning(format, *args)
+            return
+
+        logger.info(format, *args)
 
     @contextmanager
     def handle_error(self):
@@ -146,7 +156,7 @@ class RequestHandler(server.BaseHTTPRequestHandler):
             yield self  # This is what 'as' receives in the with-block
         except Exception as ex:
             logger.error("Request aborted due to exception", exc_info=True)
-            self.send_response(500)
+            self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
             self.send_header("Content-type", "text/plain")
             self.end_headers()
             error_message = f"Internal Server Error: {str(ex)}"
@@ -167,12 +177,13 @@ class MyHTTPServer(server.HTTPServer):
     """A custom HTTP server that can handle errors."""
 
     def __init__(self, client: "Client", *args, **kwargs) -> None:
-        self._client = client
+        self.client = client
+        self.token: Optional[Token] = None
         super().__init__(*args, **kwargs)
 
     def handle_error(self, *_args, **_kwargs) -> None:
         # Abort all consumers waiting for the result queue when a exception occurred
-        self._client._result.put(None)
+        self.client._result.put(None)
 
 
 class Client:
@@ -201,6 +212,11 @@ class Client:
         """Authorize with the SSO Service and return a token.
 
         Raises a RuntimeError when authorization fails.
+
+        Usage:
+
+            c = Client(client_id="YOUR-CLIENT-ID", port=8080)
+            token = c.authorize(["publicData"])
         """
         if self._server_running:
             raise RuntimeError("server already running")
@@ -211,11 +227,10 @@ class Client:
         # Start server
         # allow_reuse_address helps avoid 'Address already in use' errors on restart
         MyHTTPServer.allow_reuse_address = True
-        handler = partial(RequestHandler, state)
         httpd = MyHTTPServer(
             client=self,
             server_address=(self._host, self._port),
-            RequestHandlerClass=handler,
+            RequestHandlerClass=partial(MyRequestHandler, state),
         )
         thread = threading.Thread(target=httpd.serve_forever)
         thread.daemon = True  # Ensures thread dies when main script exits
@@ -242,7 +257,9 @@ class Client:
         return token
 
     def _make_sso_url(self, scopes: List[str], redirect_uri: str) -> Tuple[str, str]:
-        """Generate the URL to open the SSO start page and a new state and return them."""
+        """Generate the URL to open the SSO start page
+        and a new state and return them.
+        """
         state = "".join(random.choices(string.ascii_letters + string.digits, k=16))
         query_params = {
             "response_type": "code",
@@ -271,7 +288,13 @@ class Client:
         return response.json()
 
     def refresh_token(self, token: Token) -> None:
-        """Refresh a token."""
+        """Refresh a token.
+
+        Usage:
+
+            c = Client(client_id="YOUR-CLIENT-ID", port=8080)
+            c.refresh(token)
+        """
         token_payload = self._fetch_refreshed_token(token.refresh_token)
         token_2 = Token._from_payload(token_payload, self)
         token.access_token = token_2.access_token

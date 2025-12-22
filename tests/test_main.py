@@ -99,6 +99,40 @@ class TestClient_Authorize(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             c.authorize("PublicData")
 
+    def test_should_respond_with_error_when_calling_authorized_prematurely(
+        self,
+        _: requests_mock.mock,
+        mock_webbrowser_open,
+        mock_validate_jwt_token,
+    ):
+        def f(_):
+            r = requests.get("http://127.0.0.1:8080/authorized")
+            self.assertEqual(r.status_code, 200)
+
+        mock_webbrowser_open.side_effect = f
+        mock_validate_jwt_token.return_value = {}
+        c = Client("client_id")
+        with self.assertRaises(RuntimeError):
+            c.authorize("PublicData")
+
+    def test_should_respond_with_not_found_when_calling_undefined_route(
+        self,
+        _: requests_mock.mock,
+        mock_webbrowser_open,
+        mock_validate_jwt_token,
+    ):
+        def f(_):
+            r = requests.get("http://127.0.0.1:8080/invalid")
+            self.assertEqual(r.status_code, 404)
+            r = requests.get("http://127.0.0.1:8080/authorized")
+            self.assertEqual(r.status_code, 200)
+
+        mock_webbrowser_open.side_effect = f
+        mock_validate_jwt_token.return_value = {}
+        c = Client("client_id")
+        with self.assertRaises(RuntimeError):
+            c.authorize("PublicData")
+
 
 @requests_mock.Mocker()
 @patch(MODULE_PATH + ".Client._validate_jwt_token")
