@@ -40,6 +40,7 @@ METADATA_CACHE_TIME = 300  # 5 minutes
 METADATA_URL = "https://login.eveonline.com/.well-known/oauth-authorization-server"
 RESOURCE_HOST = "login.eveonline.com"
 TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
+REQUESTS_TIMEOUT = 10
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class Token:
     scopes: List[str]
 
     def is_valid(self) -> bool:
+        """Report whether the token has not yet expired."""
         return self.expires_at > dt.datetime.now()
 
     @classmethod
@@ -104,7 +106,7 @@ class RequestHandler(server.BaseHTTPRequestHandler):
                 if data["state"] != self._state:
                     raise RuntimeError("Invalid state")
 
-                code_verifier, _ = _generate_code_challenge()
+                code_verifier, _ = generate_code_challenge()
                 x = data.get("code", "")
                 code = x[0] if isinstance(x, list) else x
 
@@ -152,7 +154,7 @@ class RequestHandler(server.BaseHTTPRequestHandler):
             raise
 
 
-def _generate_code_challenge() -> Tuple[bytes, str]:
+def generate_code_challenge() -> Tuple[bytes, str]:
     """Generate a code challenge for PKCE."""
     code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32))
     sha256 = hashlib.sha256()
@@ -168,18 +170,18 @@ class MyHTTPServer(server.HTTPServer):
         self._client = client
         super().__init__(*args, **kwargs)
 
-    def handle_error(self, *args, **kwargs) -> None:
+    def handle_error(self, *_args, **_kwargs) -> None:
         # Abort all consumers waiting for the result queue when a exception occurred
-        self._client._result.shutdown(immediate=True)
+        self._client._result.put(None)
 
 
 class Client:
     """Client is a client for authorizing desktop applications
     with the EVE Online SSO service.
-    It implements OAuth 2.0 with the PKCE protocol.
+    It implements the OAuth 2.0 protocol with the PKCE authorization code flow.
 
     A Client instance is re-usable.
-    Client will log to the standard logger.
+    A Client will log to the standard logger.
 
     The default callback is: http://127.0.0.1:8080/callback
     """
@@ -218,26 +220,29 @@ class Client:
         thread = threading.Thread(target=httpd.serve_forever)
         thread.daemon = True  # Ensures thread dies when main script exits
         thread.start()
-        logger.info(f"Server started at {httpd.server_address}")
+        logger.info("Server started at %s", httpd.server_address)
         self._server_running = True
 
+        # open the SSO start page in the local browser
         webbrowser.open(url)
-        try:
-            token: Token = self._result.get()
-        except queue.ShutDown:
+
+        # wait for the SSO process to finish
+        token: Optional[Token] = self._result.get()
+
+        # Stops the server and clean up the thread
+        httpd.shutdown()  # Stops serve_forever loop
+        httpd.server_close()  # Closes the socket
+        thread.join()
+        self._server_running = False
+        logger.info("Server stopped.")
+
+        if not token:
             raise RuntimeError("Failed to authorize") from None
-        finally:
-            # Stops the server and cleans up the thread
-            httpd.shutdown()  # Stops serve_forever loop
-            httpd.server_close()  # Closes the socket
-            thread.join()
-            self._server_running = False
-            logger.info("Server stopped.")
 
         return token
 
     def _make_sso_url(self, scopes: List[str], redirect_uri: str) -> Tuple[str, str]:
-        """Generate the URL to start the SSO process and a new state and return them."""
+        """Generate the URL to open the SSO start page and a new state and return them."""
         state = "".join(random.choices(string.ascii_letters + string.digits, k=16))
         query_params = {
             "response_type": "code",
@@ -261,7 +266,7 @@ class Client:
             "client_id": self._client_id,
             "code_verifier": code_verifier,
         }
-        response = requests.post(TOKEN_URL, data=data)
+        response = requests.post(TOKEN_URL, data=data, timeout=REQUESTS_TIMEOUT)
         response.raise_for_status()
         return response.json()
 
@@ -284,7 +289,9 @@ class Client:
         headers = {
             "Host": RESOURCE_HOST,
         }
-        response = requests.post(TOKEN_URL, data=data, headers=headers)
+        response = requests.post(
+            TOKEN_URL, data=data, headers=headers, timeout=REQUESTS_TIMEOUT
+        )
         response.raise_for_status()
         return response.json()
 
@@ -322,12 +329,12 @@ class Client:
         if self._jwks_metadata and self._jwks_metadata_ttl > time.time():
             return self._jwks_metadata
 
-        resp = requests.get(METADATA_URL)
+        resp = requests.get(METADATA_URL, timeout=REQUESTS_TIMEOUT)
         resp.raise_for_status()
         metadata = resp.json()
 
         jwks_uri = metadata["jwks_uri"]
-        resp = requests.get(jwks_uri)
+        resp = requests.get(jwks_uri, timeout=REQUESTS_TIMEOUT)
         resp.raise_for_status()
         jwks_metadata = resp.json()
 

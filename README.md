@@ -11,7 +11,7 @@ An Python library for authorizing desktop apps with the EVE online SSO.
 python-eveauth is an library for authorizing Python scripts on desktops with the EVE online SSO. This allows obtaining SSO tokens with any Python script, e.g. CLI tools, GUI apps or jupiter notebooks.
 
 > [!Note]
-> This library requires a system with a local web browser and will therefore only work on desktop like machines.
+> This library is designed to run on desktops and requires a system with a local web browser.
 
 ## Installation
 

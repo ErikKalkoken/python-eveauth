@@ -28,6 +28,11 @@ classifiers = [
 ]
 dependencies = ["requests", "python-jose"]
 
+[project.optional-dependencies]
+test = [
+    "requests-mock",
+]
+
 [project.urls]
 Homepage = "https://github.com/ErikKalkoken/python-eveauth"
 Source = "https://github.com/ErikKalkoken/python-eveauth"
@@ -38,17 +43,3 @@ name = "eveauth"
 
 [tool.isort]
 profile = "black"
-
-[tool.pylint.'MASTER']
-ignore-patterns = ["__init__.py"]
-ignore-paths = ["^.*/tests/.*$"]
-
-[tool.pylint.'BASIC']
-good-names = ["i", "j", "k", "ex", "id", "r"]
-
-[tool.pylint.'FORMAT']
-max-line-length = 120
-
-[tool.pylint.'MESSAGES CONTROL']
-# disable = ["E5142", "E1101", "W0511","R0902", "R0903", "R0913", "R0911", "R0801", "C0415"]
-disable = ["R0912", "R0913"]
