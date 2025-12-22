@@ -4,6 +4,8 @@ An Python library for authorizing desktop apps with the EVE online SSO.
 
 [![release](https://img.shields.io/pypi/v/python-eveauth?label=release)](https://pypi.org/project/python-eveauth/)
 [![python](https://img.shields.io/pypi/pyversions/python-eveauth)](https://pypi.org/project/python-eveauth/)
+[![CI/CD](https://github.com/ErikKalkoken/python-eveauth/actions/workflows/cicd.yaml/badge.svg)](https://github.com/ErikKalkoken/python-eveauth/actions/workflows/cicd.yaml)
+[![codecov](https://codecov.io/gh/ErikKalkoken/python-eveauth/graph/badge.svg?token=NBGLASsNXq)](https://codecov.io/gh/ErikKalkoken/python-eveauth)
 [![license](https://img.shields.io/badge/license-MIT-green)](https://gitlab.com/ErikKalkoken/python-eveauth/-/blob/master/LICENSE)
 
 ## Description
