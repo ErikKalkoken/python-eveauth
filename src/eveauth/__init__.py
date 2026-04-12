@@ -1,4 +1,8 @@
-"""A library for authorizing desktop apps with the EVE online SSO."""
+"""
+This is the documentation for python-eveauth.
+
+.. include:: ../../README.md
+"""
 
 from .main import Client, Token
 

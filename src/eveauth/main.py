@@ -38,9 +38,9 @@ AUTHORIZE_URL = "https://login.eveonline.com/v2/oauth/authorize"
 EXPECTED_AUDIENCE = "EVE Online"
 METADATA_CACHE_TIME = 300  # 5 minutes
 METADATA_URL = "https://login.eveonline.com/.well-known/oauth-authorization-server"
+REQUESTS_TIMEOUT = 10
 RESOURCE_HOST = "login.eveonline.com"
 TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
-REQUESTS_TIMEOUT = 10
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +50,17 @@ class Token:
     """Token represents an OAuth2 token for a character in Eve Online."""
 
     access_token: str
+    """Access token."""
     character_id: int
+    """ID of the EVE character that owns the token."""
     character_name: str
+    """Name of the EVE character that owns the token"""
     expires_at: dt.datetime
+    """Time the token expires."""
     refresh_token: str
+    """Refresh token."""
     scopes: List[str]
+    """List of granted scopes."""
 
     def is_valid(self) -> bool:
         """Report whether the token has not yet expired."""
@@ -190,12 +196,18 @@ class MyHTTPServer(server.HTTPServer):
 class Client:
     """Client is a client for authorizing desktop applications
     with the EVE Online SSO service.
-    It implements the OAuth 2.0 protocol with the PKCE authorization code flow.
 
+    It implements the OAuth 2.0 protocol with the PKCE authorization code flow.
+    It will temporarily run a HTTP server so it can receive the SSO request.
     A Client instance is re-usable.
-    A Client will log to the standard logger.
+    A Client will log to a standard logger.
 
     The default callback is: http://127.0.0.1:8080/callback
+
+    Args:
+        client_id: Client ID of the SSO app
+        port: Port of the HTTP server
+        host: IP address of the HTTP server
     """
 
     def __init__(
@@ -212,12 +224,13 @@ class Client:
     def authorize(self, *scopes: str) -> Token:
         """Authorize with the SSO Service and return a token.
 
-        Raises a RuntimeError when authorization fails.
+        This will run a HTTP server for the duration of the SSO process.
 
-        Usage:
+        Args:
+            scopes: List of requested scopes
 
-            c = Client(client_id="YOUR-CLIENT-ID", port=8080)
-            token = c.authorize(["publicData"])
+        Raises:
+            RuntimeError when authorization fails.
         """
         if self._server_running:
             raise RuntimeError("server already running")
@@ -291,10 +304,8 @@ class Client:
     def refresh_token(self, token: Token) -> None:
         """Refresh a token.
 
-        Usage:
-
-            c = Client(client_id="YOUR-CLIENT-ID", port=8080)
-            c.refresh(token)
+        Args:
+            token: SSO token to refresh
         """
         token_payload = self._fetch_refreshed_token(token.refresh_token)
         token_2 = Token._from_payload(token_payload, self)

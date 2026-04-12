@@ -1,6 +1,6 @@
 # python-eveauth
 
-An Python library for authorizing desktop apps with the EVE online SSO.
+A Python library for authorizing desktop apps with the EVE online SSO.
 
 [![release](https://img.shields.io/pypi/v/python-eveauth?label=release)](https://pypi.org/project/python-eveauth/)
 [![python](https://img.shields.io/pypi/pyversions/python-eveauth)](https://pypi.org/project/python-eveauth/)
@@ -10,8 +10,8 @@ An Python library for authorizing desktop apps with the EVE online SSO.
 
 ## Description
 
-python-eveauth is a library for authorizing Python scripts on desktops with the EVE online SSO.
-This allows obtaining SSO tokens with any Python script, e.g. CLI tools, GUI apps or Jupiter notebooks.
+**python-eveauth** is a library for authorizing Python scripts on desktops with the EVE online SSO.
+It enables a Python script (e.g. CLI tools, GUI apps or Jupiter notebooks) to obtain SSO tokens that grant authenticated access to the EVE Online API (ESI).
 
 ## Installation
 
@@ -19,10 +19,15 @@ This allows obtaining SSO tokens with any Python script, e.g. CLI tools, GUI app
 pip install python-eveauth
 ```
 
-### Usage
+## Quick Start
 
-First you need to create an EVE SSO app for your script on [Eve Online's developers site](https://developers.eveonline.com/).
-The default callback for your SSO app is: `http://127.0.0.1:8080/callback`
+First you need to create an EVE SSO app for your script on [Eve Online's developers site](https://developers.eveonline.com/):
+
+- Name: Any name
+- Callback URL: The default callback for your SSO app is: `http://127.0.0.1:8080/callback`
+- Enabled Scopes: Select all scopes needed for your app (you can change this later if you want). Select at least one scope, e.g. `publicData`
+
+This will create a SSO app and give you a SSO client ID.
 
 Then you can start authorizing your script with **eveauth**.
 

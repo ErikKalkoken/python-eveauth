@@ -1,13 +1,8 @@
 [build-system]
-requires = ["flit_core >=3.2,<4"]
 build-backend = "flit_core.buildapi"
+requires = ["flit_core >=3.2,<4"]
 
 [project]
-name = "python-eveauth"
-dynamic = ["version", "description"]
-readme = "README.md"
-license = {file = "LICENSE"}
-requires-python = ">=3.10"
 authors = [
     { name = "Erik Kalkoken", email = "kalkoken87@gmail.com" },
 ]
@@ -26,6 +21,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+description = "A library for authorizing desktop apps with the EVE online SSO."
+dynamic = ["version"]
+license = {file = "LICENSE"}
+name = "python-eveauth"
+readme = "README.md"
+requires-python = ">=3.10"
 dependencies = ["requests", "python-jose"]
 
 [project.optional-dependencies]
@@ -33,11 +34,12 @@ test = [
     "requests-mock",
     "coverage"
 ]
+docs = ["pdoc"]
 
 [project.urls]
-Homepage = "https://github.com/ErikKalkoken/python-eveauth"
-Source = "https://github.com/ErikKalkoken/python-eveauth"
-Tracker = "https://github.com/ErikKalkoken/python-eveauth/issues"
+homepage = "https://github.com/ErikKalkoken/python-eveauth"
+source = "https://github.com/ErikKalkoken/python-eveauth"
+issues = "https://github.com/ErikKalkoken/python-eveauth/issues"
 
 [tool.flit.module]
 name = "eveauth"
