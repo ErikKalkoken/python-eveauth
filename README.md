@@ -10,7 +10,8 @@ An Python library for authorizing desktop apps with the EVE online SSO.
 
 ## Description
 
-python-eveauth is a library for authorizing Python scripts on desktops with the EVE online SSO. This allows obtaining SSO tokens with any Python script, e.g. CLI tools, GUI apps or Jupiter notebooks.
+python-eveauth is a library for authorizing Python scripts on desktops with the EVE online SSO.
+This allows obtaining SSO tokens with any Python script, e.g. CLI tools, GUI apps or Jupiter notebooks.
 
 ## Installation
 
@@ -20,13 +21,17 @@ pip install python-eveauth
 
 ### Usage
 
-First you need to create an EVE SSO app for your script on [Eve Online's developers site](https://developers.eveonline.com/). The default callback for your SSO app is: `http://127.0.0.1:8080/callback`
+First you need to create an EVE SSO app for your script on [Eve Online's developers site](https://developers.eveonline.com/).
+The default callback for your SSO app is: `http://127.0.0.1:8080/callback`
 
 Then you can start authorizing your script with **eveauth**.
 
-Below is an basic example that show how you can use **eveauth**. It first authorizes the script and obtains a token. Then fetches the wallet balance for the authorized character with the token. The token can later be refreshed as needed.
+Below is an basic example that show how you can use **eveauth**.
+It first authorizes the script and obtains a token.
+Then fetches the wallet balance for the authorized character with the token.
+The token can later be refreshed as needed.
 
-```py
+```python
 import requests
 from eveauth import Client
 
@@ -50,3 +55,5 @@ print(r.text)
 # Refresh the token
 # c.refresh_token(token)
 ```
+
+You can find more examples in the directory `/examples`.

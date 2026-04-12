@@ -209,3 +209,4 @@ __marimo__/
 # Custom
 .temp/
 .vscode/
+load_env

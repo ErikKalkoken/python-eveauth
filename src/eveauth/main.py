@@ -94,6 +94,7 @@ class MyRequestHandler(server.BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
+        """Handle all HTTP GET requests."""
         parsed_url = urllib.parse.urlparse(self.path)
 
         if parsed_url.path == "/callback":
