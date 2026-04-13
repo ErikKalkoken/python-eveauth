@@ -5,7 +5,7 @@ import requests
 from eveauth import Client
 
 # Create an auth client
-c = Client(client_id=os.getenv("SSO_CLIENT_ID"))
+c = Client(client_id=os.getenv("SSO_CLIENT_ID", ""))
 
 # Authorize the current script with the character wallet scope
 token = c.authorize("esi-wallet.read_character_wallet.v1")

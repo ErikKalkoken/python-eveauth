@@ -3,4 +3,4 @@ coverage:
 	coverage report -m
 
 docs:
-	pdoc -d=google eveauth
+	pdoc -d=google -p=8088 eveauth

@@ -1,16 +1,4 @@
-"""A module for authorizing a Python script with the EVE online SSO.
-
-This script is designed for desktops and has no external dependencies.
-
-Usage:
-
-    # Authorize the app
-    c = Client(client_id="YOUR-CLIENT-ID", port=8080)
-    token = c.authorize(["publicData"])
-
-    # Refresh the token
-    c.refresh_token(token)
-"""
+"""A module for authorizing a Python script with the EVE online SSO."""
 
 import base64
 import datetime as dt
@@ -35,10 +23,12 @@ from jose import jwt
 
 ACCEPTED_ISSUERS = ("login.eveonline.com", "https://login.eveonline.com")
 AUTHORIZE_URL = "https://login.eveonline.com/v2/oauth/authorize"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8080
+DEFAULT_REQUEST_TIMEOUT = 3
 EXPECTED_AUDIENCE = "EVE Online"
 METADATA_CACHE_TIME = 300  # 5 minutes
 METADATA_URL = "https://login.eveonline.com/.well-known/oauth-authorization-server"
-REQUESTS_TIMEOUT = 10
 RESOURCE_HOST = "login.eveonline.com"
 TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
 
@@ -51,14 +41,19 @@ class Token:
 
     access_token: str
     """Access token."""
+
     character_id: int
     """ID of the EVE character that owns the token."""
+
     character_name: str
     """Name of the EVE character that owns the token"""
+
     expires_at: dt.datetime
     """Time the token expires."""
+
     refresh_token: str
     """Refresh token."""
+
     scopes: List[str]
     """List of granted scopes."""
 
@@ -208,11 +203,23 @@ class Client:
         client_id: Client ID of the SSO app
         port: Port of the HTTP server
         host: IP address of the HTTP server
+        request_timeout: Timeout for HTTP requests in seconds
+
+    Raises:
+        `ValueError` when validation fails
     """
 
     def __init__(
-        self, client_id: str, port: int = 8080, host: str = "127.0.0.1"
+        self,
+        client_id: str,
+        *,
+        port: int = DEFAULT_PORT,
+        host: str = DEFAULT_HOST,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
     ) -> None:
+        if not client_id:
+            raise ValueError("must provide a client ID")
+
         self._client_id = str(client_id)
         self._port = int(port)
         self._host = str(host)
@@ -220,6 +227,7 @@ class Client:
         self._server_running = False
         self._jwks_metadata: Optional[dict] = None
         self._jwks_metadata_ttl = 0
+        self._timeout = float(request_timeout)
 
     def authorize(self, *scopes: str) -> Token:
         """Authorize with the SSO Service and return a token.
@@ -229,8 +237,12 @@ class Client:
         Args:
             scopes: List of requested scopes
 
+        Returns:
+            A new token
+
         Raises:
-            RuntimeError when authorization fails.
+            `RuntimeError` when authorization fails or the browser fails to open.
+            `ValueError` when validation fails.
         """
         if self._server_running:
             raise RuntimeError("server already running")
@@ -253,10 +265,11 @@ class Client:
         self._server_running = True
 
         # open the SSO start page in the local browser
-        webbrowser.open(url)
-
-        # wait for the SSO process to finish
-        token: Optional[Token] = self._result.get()
+        token = None
+        browser_opened = webbrowser.open(url)
+        if browser_opened:
+            # wait for the SSO process to finish
+            token: Optional[Token] = self._result.get()
 
         # Stops the server and clean up the thread
         httpd.shutdown()  # Stops serve_forever loop
@@ -265,8 +278,11 @@ class Client:
         self._server_running = False
         logger.info("Server stopped.")
 
+        if not browser_opened:
+            raise RuntimeError("Failed to open browser")
+
         if not token:
-            raise RuntimeError("Failed to authorize") from None
+            raise RuntimeError("Failed to authorize")
 
         return token
 
@@ -297,7 +313,7 @@ class Client:
             "client_id": self._client_id,
             "code_verifier": code_verifier,
         }
-        response = requests.post(TOKEN_URL, data=data, timeout=REQUESTS_TIMEOUT)
+        response = requests.post(TOKEN_URL, data=data, timeout=self._timeout)
         response.raise_for_status()
         return response.json()
 
@@ -325,19 +341,23 @@ class Client:
             "Host": RESOURCE_HOST,
         }
         response = requests.post(
-            TOKEN_URL, data=data, headers=headers, timeout=REQUESTS_TIMEOUT
+            TOKEN_URL, data=data, headers=headers, timeout=self._timeout
         )
         response.raise_for_status()
         return response.json()
 
     def _validate_jwt_token(self, token: str | bytes) -> Dict[str, Any]:
-        """
-        Validates a JWT Token.
+        """Validates a JWT Token.
 
-        :param str token: The JWT token to validate
-        :returns: The content of the validated JWT access token
-        :raises ExpiredSignatureError: If the token has expired
-        :raises JWTError: If the token is invalid
+        Args:
+            token (str): The JWT token to validate.
+
+        Returns:
+            dict: The content of the validated JWT access token.
+
+        Raises:
+            ExpiredSignatureError: If the token has expired.
+            JWTError: If the token is invalid.
         """
         metadata = self._fetch_jwks_metadata()
         keys = metadata["keys"]
@@ -356,20 +376,19 @@ class Client:
         )
 
     def _fetch_jwks_metadata(self) -> Dict[str, Any]:
-        """
-        Fetches the JWKS metadata from the SSO server.
+        """Fetches the JWKS metadata from the SSO server.
 
         :returns: The JWKS metadata
         """
         if self._jwks_metadata and self._jwks_metadata_ttl > time.time():
             return self._jwks_metadata
 
-        resp = requests.get(METADATA_URL, timeout=REQUESTS_TIMEOUT)
+        resp = requests.get(METADATA_URL, timeout=self._timeout)
         resp.raise_for_status()
         metadata = resp.json()
 
         jwks_uri = metadata["jwks_uri"]
-        resp = requests.get(jwks_uri, timeout=REQUESTS_TIMEOUT)
+        resp = requests.get(jwks_uri, timeout=self._timeout)
         resp.raise_for_status()
         jwks_metadata = resp.json()
 

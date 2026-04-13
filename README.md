@@ -62,3 +62,7 @@ print(r.text)
 ```
 
 You can find more examples in the directory `/examples`.
+
+## Documentation
+
+The full documentation can be found here: [Documentation](https://erikkalkoken.github.io/python-eveauth).

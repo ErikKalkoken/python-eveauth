@@ -22,6 +22,30 @@ logging.basicConfig(
 MODULE_PATH = "eveauth.main"
 
 
+class TestClient_Init(unittest.TestCase):
+    def test_can_init_with_defaults(self):
+        c = Client("my-token")
+        self.assertEqual(c._client_id, "my-token")
+        self.assertEqual(c._port, 8080)
+        self.assertEqual(c._host, "127.0.0.1")
+
+    def test_can_init_with_configuration(self):
+        c = Client("my-token", port=30123, host="localhost")
+        self.assertEqual(c._client_id, "my-token")
+        self.assertEqual(c._port, 30123)
+        self.assertEqual(c._host, "localhost")
+
+    def test_should_raise_error_when_validation_fails(self):
+        with self.assertRaises(ValueError):
+            Client("")
+
+        with self.assertRaises(ValueError):
+            Client(None)  # type: ignore
+
+        with self.assertRaises(ValueError):
+            Client("my-token", port="invalid")  # type: ignore
+
+
 @requests_mock.Mocker(real_http=True)
 @patch(MODULE_PATH + ".Client._validate_jwt_token")
 @patch(MODULE_PATH + ".webbrowser.open")
@@ -39,6 +63,7 @@ class TestClient_Authorize(unittest.TestCase):
             q2 = urllib.parse.urlencode({"state": state, "code": "code"})
             r = requests.get(f"http://127.0.0.1:8080/callback?{q2}")
             self.assertTrue(r.ok)
+            return True
 
         mock_webbrowser_open.side_effect = f
         mock_validate_jwt_token.return_value = {
@@ -81,6 +106,7 @@ class TestClient_Authorize(unittest.TestCase):
             q2 = urllib.parse.urlencode({"state": state, "code": "code"})
             r = requests.get(f"http://127.0.0.1:8080/callback?{q2}")
             self.assertEqual(r.status_code, 500)
+            return True
 
         mock_webbrowser_open.side_effect = f
         mock_validate_jwt_token.return_value = {
@@ -108,6 +134,7 @@ class TestClient_Authorize(unittest.TestCase):
         def f(_):
             r = requests.get("http://127.0.0.1:8080/authorized")
             self.assertEqual(r.status_code, 200)
+            return True
 
         mock_webbrowser_open.side_effect = f
         mock_validate_jwt_token.return_value = {}
@@ -126,6 +153,22 @@ class TestClient_Authorize(unittest.TestCase):
             self.assertEqual(r.status_code, 404)
             r = requests.get("http://127.0.0.1:8080/authorized")
             self.assertEqual(r.status_code, 200)
+            return True
+
+        mock_webbrowser_open.side_effect = f
+        mock_validate_jwt_token.return_value = {}
+        c = Client("client_id")
+        with self.assertRaises(RuntimeError):
+            c.authorize("PublicData")
+
+    def test_should_abort_when_browser_can_not_open(
+        self,
+        _: requests_mock.mock,
+        mock_webbrowser_open,
+        mock_validate_jwt_token,
+    ):
+        def f(_):
+            return False
 
         mock_webbrowser_open.side_effect = f
         mock_validate_jwt_token.return_value = {}
